@@ -1,0 +1,76 @@
+name: master
+
+on:
+  push:
+    branches:
+      - master
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        dotnet: [
+          { framework: net6.0, conditionframework: net6.0, version: 6.0.x },
+        ]
+
+    name: ${{ matrix.dotnet.framework }} – run build
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ matrix.dotnet.version }}
+
+      - name: Display dotnet version
+        run: dotnet --version
+
+      - name: Install dependencies
+        run: | 
+            dotnet restore ./src/IdentityServer4.AccessTokenValidation.csproj --source https://api.nuget.org/v3/index.json
+
+      - name: Run build IdentityServer4.AccessTokenValidation
+        run: dotnet build --configuration Release --framework ${{ matrix.dotnet.framework }} ./src/IdentityServer4.AccessTokenValidation.csproj /p:Framework=${{ matrix.dotnet.conditionframework }}
+
+  release:
+    needs: build
+
+    name: Create release
+    
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version
+        id: extract-version
+        run: |
+          version=$(cat ./src/IdentityServer4.AccessTokenValidation.csproj | grep "<VersionPrefix>" | sed -e "s/ *<\/*VersionPrefix>//g")
+          echo "Package version: $version"
+          if [ -z "${version// }" ]; then exit 1; fi
+          echo "::set-output name=package_version::$version"
+      - name: Extract latest commit message
+        id: latest-commit
+        run: |
+          echo "${{ github.ref }}"
+          echo "::set-output name=message::$(git log --format=%B -n 1 ${{ github.event.after }})"
+      - uses: jwalton/gh-find-current-pr@v1
+        id: find-pr
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create release
+        id: create_release
+        uses: actions/create-release@latest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.extract-version.outputs.package_version }}
+          release_name: Release v${{ steps.extract-version.outputs.package_version }}
+          body: ${{ steps.find-pr.outputs.body || steps.latest-commit.outputs.message }}
+          draft: true
+          prerelease: false     
+          

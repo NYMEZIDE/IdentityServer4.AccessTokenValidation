@@ -1,0 +1,91 @@
+
+name: release
+
+on:
+  release:
+    types: [published]
+    
+jobs:
+
+  publish:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        dotnet: [
+          { framework: net6.0, conditionframework: net6.0, version: 6.0.x },
+        ]
+
+    name: ${{ matrix.dotnet.framework }} – run build and publish
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v3
+        with:
+          dotnet-version: ${{ matrix.dotnet.version }}
+
+      - name: Display dotnet version
+        run: dotnet --version
+
+      - name: Extract version
+        id: extract-version
+        run: |
+          version=$(cat ./src/IdentityServer4.AccessTokenValidation.csproj | grep "<VersionPrefix>" | sed -e "s/ *<\/*VersionPrefix>//g")
+          echo "Package version: $version"
+          if [ -z "${version// }" ]; then exit 1; fi
+          echo "::set-output name=package_version::$version"
+
+      - name: restore, build, pack, push IdentityServer4.AccessTokenValidation
+        run: | 
+            dotnet restore ./src/IdentityServer4.AccessTokenValidation.csproj --source https://api.nuget.org/v3/index.json
+            dotnet build --configuration Release --framework ${{ matrix.dotnet.framework }} ./src/IdentityServer4.AccessTokenValidation.csproj /p:Framework=${{ matrix.dotnet.conditionframework }}
+            dotnet pack --configuration Release --output out/ ./src/IdentityServer4.AccessTokenValidation.csproj  
+      
+      - name: Run nuget push
+        run: dotnet nuget push out/*.nupkg --source https://api.nuget.org/v3/index.json --api-key ${{ secrets.NUGET_API_KEY }}
+
+      - uses: actions/upload-artifact@v2
+        with:
+          name: NuGet package
+          path: out/
+
+  upload-release-assets:
+    needs: publish
+
+    runs-on: ubuntu-latest
+
+    name: Upload release assets
+
+    steps:
+      - uses: actions/download-artifact@v2
+        with:
+          name: NuGet package
+          path: out
+
+      - name: Get package
+        id: get-package
+        run: |
+          echo "::set-output name=package::$(ls out/ | grep '\.nupkg')"
+          echo "::set-output name=symbols::$(ls out/ | grep '\.snupkg')"
+      - name: Upload package asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./out/${{ steps.get-package.outputs.package }}
+          asset_name: ${{ steps.get-package.outputs.package }}
+          asset_content_type: application/zip
+
+      - name: Upload symbols asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: ./out/${{ steps.get-package.outputs.symbols }}
+          asset_name: ${{ steps.get-package.outputs.symbols }}
+          asset_content_type: application/zip
+      
